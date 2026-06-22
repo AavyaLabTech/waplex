@@ -104,15 +104,23 @@ waplex_sender = WaplexSender(waplex_config)
 
 ### 3. Tenant model
 
-Add two columns to your tenant table:
+Add two columns to your tenant table. Run this SQL in your own migration:
+
+```sql
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS waplex_tenant_id VARCHAR;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS waplex_api_key   VARCHAR;
+```
+
+SQLAlchemy model definition:
 
 ```python
-# SQLAlchemy example
 waplex_tenant_id = Column(String, nullable=True)   # WAPlex internal tenant id
 waplex_api_key   = Column(String, nullable=True)   # X-Tenant-Key for all per-tenant calls
 ```
 
 Also ensure the tenant has a `whatsapp_number` field (the phone number used to initiate sessions, with country code, e.g. `919876543210`).
+
+> **Note:** No migration scripts are bundled in this package — it is ORM-agnostic. Add the SQL above to your project's own Alembic revision, Django migration, or ad-hoc script.
 
 ### 4. Provisioning service
 
