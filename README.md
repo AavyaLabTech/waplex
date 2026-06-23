@@ -44,15 +44,15 @@ waplex/
 
 ```bash
 # Install directly from git (no PyPI needed)
-pip install git+https://github.com/your-org/waplex.git@main
+pip install git+https://github.com/AavyaLabTech/waplex.git@main
 
 # Pin to a release tag for stability
-pip install git+https://github.com/your-org/waplex.git@v0.1.0
+pip install git+https://github.com/AavyaLabTech/waplex.git@v0.1.0
 ```
 
 Add to `requirements.txt`:
 ```
-waplex @ git+https://github.com/your-org/waplex.git@v0.1.0
+waplex @ git+https://github.com/AavyaLabTech/waplex.git@v0.1.0
 ```
 
 ---
