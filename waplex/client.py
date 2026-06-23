@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 from typing import Optional, Dict, Any, List
 
 import httpx
@@ -11,6 +12,10 @@ logger = logging.getLogger("waplex")
 class WAPlexError(Exception):
     """Raised when the WAPlex gateway returns an error or is unreachable."""
 
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class WAPlexClient:
     """
@@ -19,10 +24,27 @@ class WAPlexClient:
     Auth scopes:
       * Admin endpoints (tenant provisioning) use X-Admin-Key.
       * Per-tenant endpoints (sessions) use that tenant's X-Tenant-Key.
+
+    Use as an async context manager to reuse a single connection pool across calls:
+
+        async with WAPlexClient(config) as client:
+            result = await client.create_tenant(...)
+
+    Instantiating directly still works; each _request call opens its own connection.
     """
 
     def __init__(self, config: WaplexConfig):
         self.cfg = config
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def __aenter__(self) -> "WAPlexClient":
+        self._client = httpx.AsyncClient(timeout=self.cfg.timeout)
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     def _admin_headers(self) -> Dict[str, str]:
         return {"X-Admin-Key": self.cfg.admin_key, "Content-Type": "application/json"}
@@ -32,7 +54,9 @@ class WAPlexClient:
 
     async def _request(self, method: str, path: str, **kwargs) -> Any:
         url = f"{self.cfg.base}{path}"
-        async with httpx.AsyncClient(timeout=self.cfg.timeout) as client:
+        # Use the shared client when available (context manager); else open a transient one.
+        ctx = nullcontext(self._client) if self._client else httpx.AsyncClient(timeout=self.cfg.timeout)
+        async with ctx as client:
             try:
                 resp = await client.request(method, url, **kwargs)
             except httpx.HTTPError as e:
@@ -40,8 +64,8 @@ class WAPlexClient:
                 raise WAPlexError(f"WAPlex gateway unreachable: {e}")
 
         if resp.status_code >= 400:
-            logger.error("WAPlex %s %s %s: %s", resp.status_code, method, url, resp.text)
-            raise WAPlexError(f"WAPlex {resp.status_code}: {resp.text}")
+            logger.error("WAPlex %s %s %s", resp.status_code, method, url)
+            raise WAPlexError(f"WAPlex {resp.status_code}: {resp.text}", status_code=resp.status_code)
 
         return resp.json() if resp.content else {}
 

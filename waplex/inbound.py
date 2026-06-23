@@ -15,7 +15,7 @@ def _extract_text(message: Dict[str, Any]) -> str:
     if not message:
         return ""
     if "conversation" in message:
-        return message["conversation"]
+        return message["conversation"] or ""
     if "extendedTextMessage" in message:
         return message["extendedTextMessage"].get("text", "")
     for media in ("imageMessage", "videoMessage", "documentMessage"):

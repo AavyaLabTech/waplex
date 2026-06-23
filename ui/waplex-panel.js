@@ -2,17 +2,20 @@
  * WaplexPanel — self-contained React component for managing a WAPlex WhatsApp session.
  *
  * Props:
- *   apiGet(path)           -> Promise<{data}>   e.g. () => axios.get(path)
+ *   apiGet(path)           -> Promise<{data}>   e.g. (path) => axios.get(path)
  *   apiPost(path, body)    -> Promise<{data}>
  *   whatsappNumber: string — configured WA number shown in the idle state
  *   showToast(msg, type)   -> void  (type: 'success' | 'error') — optional
  *   Icon: component        — optional; ({ name, size }) -> JSX. Falls back to plain text.
+ *   basePath: string       — optional; prefix for all session API routes.
+ *                            Default: '/api/whatsapp/session'
+ *   onError: function      — optional; called with the raw error on any fetch failure.
  *
  * Backend routes required (mount whatsapp_session router in your FastAPI app):
- *   GET  /api/whatsapp/session/status
- *   GET  /api/whatsapp/session/qr
- *   POST /api/whatsapp/session/start    body: { number }
- *   POST /api/whatsapp/session/disconnect
+ *   GET  <basePath>/status
+ *   GET  <basePath>/qr
+ *   POST <basePath>/start        body: { number }
+ *   POST <basePath>/disconnect
  *
  * Usage (vanilla React via CDN):
  *   <script src="waplex-panel.js"></script>
@@ -127,14 +130,33 @@
         return React.createElement('span', null, labels[name] || '');
     };
 
-    const WaplexPanel = ({ apiGet, apiPost, whatsappNumber, showToast, Icon }) => {
-        const { useState, useEffect } = React;
+    const WaplexPanel = ({ apiGet, apiPost, whatsappNumber, showToast, Icon,
+                           basePath = '/api/whatsapp/session', onError }) => {
+        const { useState, useEffect, useRef } = React;
         const toast = showToast || ((m, t) => t === 'error' ? console.error('[WaplexPanel]', m) : console.log('[WaplexPanel]', m));
         const Ico = Icon || DefaultIcon;
+
+        // Keep latest callbacks in refs so the poll closure always calls the current
+        // function without needing to be in the useEffect dep array — prevents the
+        // interval from restarting every time the parent re-renders with a new inline fn.
+        const apiGetRef = useRef(apiGet);
+        const apiPostRef = useRef(apiPost);
+        useEffect(() => { apiGetRef.current = apiGet; });
+        useEffect(() => { apiPostRef.current = apiPost; });
 
         const [waStatus, setWaStatus] = useState({ status: 'NOT_INITIALIZED', connected: false });
         const [waPairingCode, setWaPairingCode] = useState(null);
         const [waLoading, setWaLoading] = useState(false);
+        const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+        const waLoadingRef = useRef(false);
+        const confirmTimer = useRef(null);
+
+        useEffect(() => { waLoadingRef.current = waLoading; }, [waLoading]);
+
+        // Cleanup confirm timer on unmount
+        useEffect(() => () => clearTimeout(confirmTimer.current), []);
+
+        const p = (suffix) => `${basePath}${suffix}`;
 
         useEffect(() => {
             let active = true;
@@ -142,22 +164,22 @@
 
             const fetchQr = async () => {
                 try {
-                    const res = await apiGet('/api/whatsapp/session/qr');
+                    const res = await apiGetRef.current(p('/qr'));
                     if (!active) return;
                     const qr = res.data.qr;
-                    if (qr && typeof qr === 'object') {
-                        setWaPairingCode(qr.pairingCode || null);
-                    } else {
-                        setWaPairingCode(null);
-                    }
+                    setWaPairingCode(qr && typeof qr === 'object' ? (qr.pairingCode || null) : null);
                 } catch (e) {
-                    console.error('[WaplexPanel] qr error', e);
+                    if (!active) return;
+                    if (onError) onError(e);
+                    else console.error('[WaplexPanel] qr error', e);
                 }
             };
 
             const fetchStatus = async () => {
+                // Don't overwrite status mid user-action to avoid flicker
+                if (waLoadingRef.current) return;
                 try {
-                    const res = await apiGet('/api/whatsapp/session/status');
+                    const res = await apiGetRef.current(p('/status'));
                     if (!active) return;
                     setWaStatus(res.data);
                     if (res.data.status === 'DISCONNECTED' || res.data.status === 'CONNECTING') {
@@ -166,43 +188,59 @@
                         setWaPairingCode(null);
                     }
                 } catch (e) {
-                    console.error('[WaplexPanel] status error', e);
+                    if (!active) return;
+                    if (onError) onError(e);
+                    else console.error('[WaplexPanel] status error', e);
                 }
             };
 
             fetchStatus();
             poll = setInterval(fetchStatus, 5000);
             return () => { active = false; clearInterval(poll); };
-        }, [apiGet]);
+        }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
         const handleStart = async () => {
             if (!whatsappNumber) {
                 toast('Configure a WhatsApp number first.', 'error');
                 return;
             }
+            setConfirmDisconnect(false);
+            clearTimeout(confirmTimer.current);
             setWaLoading(true);
             try {
-                await apiPost('/api/whatsapp/session/start', { number: whatsappNumber });
+                await apiPostRef.current(p('/start'), { number: whatsappNumber });
                 toast('WhatsApp session starting...');
-                const r = await apiGet('/api/whatsapp/session/status');
+                const r = await apiGetRef.current(p('/status'));
                 setWaStatus(r.data);
             } catch (e) {
-                toast(e?.response?.data?.detail || 'Failed to start WhatsApp session', 'error');
+                const msg = e?.response?.data?.detail || 'Failed to start WhatsApp session';
+                toast(msg, 'error');
+                if (onError) onError(e);
             } finally {
                 setWaLoading(false);
             }
         };
 
         const handleStop = async () => {
-            if (!window.confirm('Disconnect this WhatsApp session?')) return;
+            // Two-tap confirmation — avoids window.confirm which is blocked in cross-origin iframes
+            if (!confirmDisconnect) {
+                setConfirmDisconnect(true);
+                clearTimeout(confirmTimer.current);
+                confirmTimer.current = setTimeout(() => setConfirmDisconnect(false), 3000);
+                return;
+            }
+            clearTimeout(confirmTimer.current);
+            setConfirmDisconnect(false);
             setWaLoading(true);
             try {
-                await apiPost('/api/whatsapp/session/disconnect', {});
+                await apiPostRef.current(p('/disconnect'), {});
                 toast('WhatsApp session disconnected');
                 setWaStatus({ status: 'NOT_INITIALIZED', connected: false });
                 setWaPairingCode(null);
             } catch (e) {
-                toast(e?.response?.data?.detail || 'Failed to disconnect WhatsApp session', 'error');
+                const msg = e?.response?.data?.detail || 'Failed to disconnect WhatsApp session';
+                toast(msg, 'error');
+                if (onError) onError(e);
             } finally {
                 setWaLoading(false);
             }
@@ -236,9 +274,11 @@
                     ),
                     React.createElement('p', { style: { fontWeight: 600, marginBottom: '0.25rem' } }, 'WhatsApp Linked Successfully'),
                     React.createElement('p', { style: { ...S.muted, marginBottom: '1.25rem' } }, 'Session is active and ready to deliver notifications.'),
-                    React.createElement('button', { style: { ...S.btnDanger, width: '100%', flex: 'unset' }, onClick: handleStop, disabled: waLoading },
-                        'Disconnect WhatsApp',
-                    ),
+                    React.createElement('button', {
+                        style: { ...S.btnDanger, width: '100%', flex: 'unset' },
+                        onClick: handleStop,
+                        disabled: waLoading,
+                    }, confirmDisconnect ? 'Tap again to confirm disconnect' : 'Disconnect WhatsApp'),
                 ),
 
                 // CONNECTING / DISCONNECTED-with-pairing-code state
@@ -275,7 +315,8 @@
 
                     React.createElement('div', { style: { display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' } },
                         React.createElement('button', { style: S.btnSecondary, onClick: handleStart, disabled: waLoading }, 'Regenerate Code'),
-                        React.createElement('button', { style: S.btnDanger, onClick: handleStop, disabled: waLoading }, 'Stop Session'),
+                        React.createElement('button', { style: S.btnDanger, onClick: handleStop, disabled: waLoading },
+                            confirmDisconnect ? 'Confirm Stop' : 'Stop Session'),
                     ),
                 ),
 
@@ -295,6 +336,26 @@
                         disabled: waLoading || !whatsappNumber,
                     }, whatsappNumber ? 'Connect WhatsApp' : 'Configure WhatsApp Number First'),
                 ),
+            ),
+
+            // Attribution notice required by Evolution API license (Apache 2.0 + custom conditions)
+            React.createElement('div', {
+                style: {
+                    padding: '0.5rem 1.5rem',
+                    borderTop: '1px solid var(--border, #e5e7eb)',
+                    fontSize: '0.7rem',
+                    color: 'var(--text-muted, #9ca3af)',
+                    textAlign: 'center',
+                },
+            },
+                'Powered by ',
+                React.createElement('a', {
+                    href: 'https://github.com/EvolutionAPI/evolution-api',
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    style: { color: 'inherit', textDecoration: 'underline' },
+                }, 'Evolution API'),
+                ' (Apache 2.0)',
             ),
         );
     };

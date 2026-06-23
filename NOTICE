@@ -1,0 +1,14 @@
+Waplex
+Copyright 2024 Vikram Kumar
+
+This product includes software developed by the Evolution Foundation.
+
+  Evolution API
+  Copyright 2026 Evolution Foundation
+  Licensed under the Apache License, Version 2.0 with additional conditions.
+  Source: https://github.com/EvolutionAPI/evolution-api
+  License inquiries: suporte@evofoundation.com.br
+
+This software is built on top of Evolution API, a WhatsApp gateway platform.
+In accordance with the Evolution API license, all deployments of Waplex must
+display a notice to system administrators that Evolution API is being utilized.
