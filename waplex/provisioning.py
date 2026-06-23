@@ -40,14 +40,15 @@ async def ensure_provisioned(
     try:
         record = await client.create_tenant(name=name, webhook_url=webhook_url)
     except WAPlexError as e:
-        # Only recover from a name-collision (409); re-raise auth errors, network
-        # failures, and any other status so callers get a clear diagnostic.
-        if e.status_code != 409:
+        # Recover from name-collisions (either 409 Conflict or 400 Bad Request if it already exists)
+        is_collision = (e.status_code == 409) or (e.status_code == 400 and "already exists" in str(e))
+        if not is_collision:
             raise
         record = await client.find_tenant_by_name(name)
         if not record:
             raise WAPlexError(
-                f"WAPlex tenant '{name}' not found after 409 conflict", status_code=409
+                f"WAPlex tenant '{name}' not found after name collision (status {e.status_code})",
+                status_code=e.status_code
             ) from e
         if webhook_url and record.get("webhook_url") != webhook_url:
             try:
