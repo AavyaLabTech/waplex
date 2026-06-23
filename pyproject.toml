@@ -27,4 +27,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/vikramkumar/waplex"
+Repository = "https://github.com/AavyaLabTech/waplex"
+
+[tool.setuptools]
+packages = ["waplex"]
